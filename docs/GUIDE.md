@@ -17,8 +17,10 @@ design-system/src/main/java/com/prauga/pvot/designsystem/
 ├── theme/        PvotAppTheme, PvotTheme, PvotThemeDefaults, palette, PvotTypography, PvotShapes, PvotSpacing
 ├── effects/      pvotPressScale, pvotGlass, pvotGlassBackdrop, pvotGlassRim, PvotGlassStyle, PvotGlassDefaults
 ├── motion/       PvotMotion, PvotDurations, pvotReveal
-├── components/   PvotCard, PvotGlassCard, PvotGlassIconButton, PvotScreen, PvotSkeleton
-│   └── picker/   PvotClockPicker, PvotDurationPicker, PvotPickerColors, PvotPickerDefaults
+├── components/   PvotCard, PvotGlassCard, PvotGlassIconButton, PvotScreen, PvotSkeleton, PvotDialog, PvotBottomSheet
+│   ├── picker/   PvotClockPicker, PvotDurationPicker, PvotPickerColors, PvotPickerDefaults
+│   ├── textfield/ PvotTextField, PvotTextFieldColors, PvotTextFieldDefaults
+│   └── slider/   PvotSlider, PvotRangeSlider, PvotSliderColors, PvotSliderDefaults
 ├── navigation/   PvotNavBar, PvotNavBarItem, PvotTabItem, PvotNavBarColors, PvotNavBarSizes, PvotNavBarDefaults
 └── platform/     PvotBaseActivity
 
@@ -138,7 +140,9 @@ outside, with a slight red and blue split, a mirrored copy of what lies outside 
 soft light in place of a border. `Modifier.pvotGlassRim()` adds a fine rim of light that turns
 as the phone tilts and settles back once it is held still.
 
-Only content marked with `Modifier.pvotGlassBackdrop` shows through, so mark the content behind
+Only content marked with `Modifier.pvotGlassBackdrop` shows through, and it should include an opaque
+background (put `.background(...)` after `.pvotGlassBackdrop(...)` in the chain), or the glass lets the
+sharp content behind it show through, so mark the content behind
 the glass and draw the glass over it, not inside it:
 
 ```kotlin
@@ -161,6 +165,15 @@ Box {
 | 13+ | frost and the bending rim |
 | 12 | frost |
 | 11 and older | the tint alone |
+
+**How much glass:** `LocalPvotGlassIntensity` (0 to 1, default 1) is read by every glass in the tree,
+including `PvotNavBar`, `PvotGlassCard` and `PvotGlassIconButton`. Provide it near the root and let
+the user choose. 1 is the full effect; 0 is the cheapest, a frosted blur with a surface-colored
+tint and no edge lens, rim or light, which is what a frosted header or bar looks like. Below
+`PvotGlassDefaults.LensThreshold` the edge lens is switched off entirely, so the glass stops paying
+for it. For a style of your own, `PvotGlassDefaults.style(intensity, base)` returns `base` at that
+intensity, and `pvotGlassRim(alpha = intensity)` fades the rim. Apps should keep glass to a few
+floating surfaces (bars, sheets); at 0 the catalog turns its cards back into plain cards.
 
 `PvotGlassStyle` holds every value of the effect, tuned for a glass 46dp across and scaled with
 the glass's shorter side; `PvotGlassDefaults` holds the tint, the rim's width,
@@ -187,9 +200,14 @@ Scaffold(bottomBar = { PvotNavBar(selectedTab, onTabClick, tabs, backdrop = back
 | `PvotGlassIconButton` | `components` | Round glass button for an icon floating over a backdrop |
 | `PvotScreen` | `components` | `LazyColumn` with screen padding that clears the floating nav bar |
 | `PvotSkeleton` | `components` | Shimmering placeholder shown while content loads |
+| `PvotDialog` | `components` | Centered dialog that eases in and out over its own scrim; icon, title, message, optional content and stacked `PvotDialogAction` buttons. Driven by `visible` |
+| `PvotBottomSheet` | `components` | Modal sheet with a slim handle, optional title and scrolling content; `PvotSheetItem` rows. Driven by `visible` |
+| `PvotTextField` | `components.textfield` | Soft filled field: floating label, focus ring, validation shake, animated supporting text, counter, icons, multiline |
+| `PvotSlider` | `components.slider` | Minimal slider: slim track, round thumb, tap to jump, optional snapping steps |
+| `PvotRangeSlider` | `components.slider` | Two-thumb version of `PvotSlider` for choosing a span |
 | `PvotClockPicker` | `components.picker` | Wheel picker for a `LocalTime` (hours, minutes) |
 | `PvotDurationPicker` | `components.picker` | Wheel picker for a `Duration` under 24h (hours, minutes, seconds) |
-| `PvotNavBar` | `navigation` | Floating bottom bar; selected tab expands into a gradient pill. Takes a list of `PvotTabItem` or a slot of `PvotNavBarItem`; pass a `backdrop` to make it glass |
+| `PvotNavBar` | `navigation` | Floating bottom bar; selected tab opens into a filled pill; dragging along the bar previews and selects; `compact` shrinks it to icons. Takes a list of `PvotTabItem` or a slot of `PvotNavBarItem`; pass a `backdrop` to make it glass |
 | `PvotNavBarItem` | `navigation` | One item for the slot overload of `PvotNavBar` |
 | `PvotLoadingContent` | `core-ui` | Indeterminate progress indicator for `UiState.Loading` |
 | `PvotErrorContent` | `core-ui` | Title, message and retry button for `UiState.Error` |
@@ -201,8 +219,10 @@ default comes from its `*Defaults` object:
 
 | | Default | Overriding |
 |---|---|---|
-| Nav bar colors | `PvotNavBarDefaults.themeColors()`: the brand gradient, or derived from the color scheme under dynamic color | `PvotNavBarDefaults.colors(...)`, `PvotNavBarDefaults.colors(colorScheme)` |
+| Nav bar colors | `PvotNavBarDefaults.themeColors()`: derived from the color scheme | `PvotNavBarDefaults.colors(...)`, `PvotNavBarDefaults.colors(colorScheme)` |
 | Nav bar sizes | `LocalPvotNavBarSizes.current` | `PvotNavBarSizes(...)`; provide `LocalPvotNavBarSizes` so `PvotScreen` clears the same height |
+| Text field colors | `PvotTextFieldDefaults.themeColors()`, derived from the color scheme | `PvotTextFieldDefaults.colors(colorScheme, ...)` |
+| Slider colors | `PvotSliderDefaults.themeColors()`, derived from the color scheme | `PvotSliderDefaults.colors(colorScheme, ...)` |
 | Picker colors | `PvotPickerDefaults.themeColors()`, derived from the color scheme | `PvotPickerDefaults.colors(...)`, `PvotPickerDefaults.colors(colorScheme)` |
 | Card | `PvotCardDefaults.shape`, `.colors()`, `.elevation()` | parameters of `PvotCard` |
 | Glass card | `PvotGlassCardDefaults.CornerRadius`, `.ContentPadding`, `PvotGlassDefaults.Style` | parameters of `PvotGlassCard` |
@@ -250,7 +270,7 @@ matching on the message.
 ## 8. Adding a component
 
 1. The composable, in the package of its layer, with KDoc and a `*Defaults` object for its values.
-2. A demo in the catalog's Design Catalog screen (`catalog/`).
+2. A catalog page: add a page composable under `catalog/.../hub/` and list it in `CatalogEntries.kt`.
 3. A row in the components table above.
 4. An entry in `CHANGELOG.md` under the unreleased version.
 5. `./gradlew apiDump`, then `./gradlew build`.

@@ -38,6 +38,8 @@ internal fun Modifier.glassSurface(
     enabled: Boolean,
     interactionSource: MutableInteractionSource,
 ): Modifier {
+    val intensity = PvotGlassDefaults.currentIntensity()
+    val glassStyle = PvotGlassDefaults.style(intensity, style)
     val shape = if (cornerRadius.isFinite) {
         RoundedCornerShape(cornerRadius)
     } else {
@@ -45,7 +47,7 @@ internal fun Modifier.glassSurface(
     }
     val pressed by interactionSource.collectIsPressedAsState()
     val fill by animateColorAsState(
-        targetValue = if (pressed) PvotGlassDefaults.PressedFillColor else style.fillColor,
+        targetValue = if (pressed) PvotGlassDefaults.PressedFillColor else glassStyle.fillColor,
         animationSpec = tween(PvotDurations.Short),
         label = "glassFill"
     )
@@ -63,10 +65,10 @@ internal fun Modifier.glassSurface(
             spotColor = shadowColor
         )
     }
-    modifier = modifier
-        .pvotGlass(backdrop, cornerRadius, style.copy(fillColor = fill))
+    modifier = with(PvotGlassDefaults) { modifier.edge(intensity, shape) }
+        .pvotGlass(backdrop, cornerRadius, glassStyle.copy(fillColor = fill))
         .clip(shape)
-    if (rim) modifier = modifier.pvotGlassRim(cornerRadius)
+    if (rim && intensity > 0f) modifier = modifier.pvotGlassRim(cornerRadius, alpha = intensity)
     if (onClick != null) {
         modifier = modifier.clickable(
             interactionSource = interactionSource,

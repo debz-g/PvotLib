@@ -7,7 +7,12 @@ package com.prauga.pvot.designsystem.effects
 import android.graphics.RuntimeShader
 import android.os.Build
 import androidx.annotation.RequiresApi
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.border
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.ProvidableCompositionLocal
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -16,6 +21,8 @@ import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.asComposeRenderEffect
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.layer.GraphicsLayer
@@ -32,6 +39,7 @@ import androidx.compose.ui.platform.InspectorInfo
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.util.lerp
 import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
@@ -55,6 +63,9 @@ import kotlin.math.min
  * @param vividSpread How much further than the bend vivid colors spread into the rim
  * @param vividMix How strongly that spread shows for a fully saturated color, 0 to 1
  * @param fillColor The glass's tint, drawn over what shows through
+ * @param frost The blur, in dp, of a glass at the frosted end of [PvotGlassDefaults.style]; it does
+ * not scale with the glass's size
+ * @param frostMix How far the blur is [frost] rather than [blur], 0 to 1
  */
 @Immutable
 public data class PvotGlassStyle(
@@ -71,7 +82,24 @@ public data class PvotGlassStyle(
     val vividSpread: Dp = 11.dp,
     val vividMix: Float = 1f,
     val fillColor: Color = PvotGlassDefaults.FillColor,
-)
+    val frost: Dp = PvotGlassDefaults.FrostBlur,
+    val frostMix: Float = 0f,
+) {
+    /** Whether the edge lens (the bend, split, reflection and light) has anything to draw. */
+    internal val lensActive: Boolean
+        get() = strength.value > 0f || aberration.value > 0f || reflection > 0f ||
+            glow > 0f || vividMix > 0f
+}
+
+/**
+ * How much liquid glass the app asks for, from 0 to 1, read by every glass in the tree.
+ *
+ * 1 is the full effect, 0 the cheapest: a frosted blur and a tint, with none of the edge bend,
+ * rim or light, as a frosted header or bar would be. Provide it near the root and let the user set
+ * it; see [PvotGlassDefaults.style].
+ */
+public val LocalPvotGlassIntensity: ProvidableCompositionLocal<Float> =
+    staticCompositionLocalOf { 1f }
 
 /** Defaults for [pvotGlass] and [pvotGlassRim]. */
 public object PvotGlassDefaults {
@@ -84,6 +112,110 @@ public object PvotGlassDefaults {
 
     /** The glass's default look. */
     public val Style: PvotGlassStyle = PvotGlassStyle()
+
+    /** The blur of a fully frosted glass, the same at any size. */
+    public val FrostBlur: Dp = 12.dp
+
+    /** Below this intensity the edge lens is switched off altogether, which saves its cost. */
+    public const val LensThreshold: Float = 0.15f
+
+    /** Whether this device can blur what is behind the glass, Android 12 and up. */
+    public val isBlurSupported: Boolean
+        get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+
+    /** Whether this device can draw the edge lens, Android 13 and up. */
+    public val isLensSupported: Boolean
+        get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+
+    /**
+     * The most glass this device can draw: 1 with the edge lens (Android 13+), a little over the
+     * lens threshold with only the blur (Android 12), and 0 with neither, where the glass is a flat,
+     * nearly opaque frost. Every glass reads its intensity through this, so a setting above it is
+     * harmless.
+     */
+    public fun maxIntensity(): Float = when {
+        isLensSupported -> 1f
+        isBlurSupported -> BlurOnlyIntensity
+        else -> 0f
+    }
+
+    /** What an app should start with: full glass where the device can, the frosted look elsewhere. */
+    public fun defaultIntensity(): Float = if (isLensSupported) 1f else 0f
+
+    /** The intensity in [LocalPvotGlassIntensity], held to what the device can draw. */
+    @Composable
+    public fun currentIntensity(): Float =
+        LocalPvotGlassIntensity.current.coerceIn(0f, maxIntensity())
+
+    private const val BlurOnlyIntensity: Float = 0.33f
+
+    /**
+     * [base] at [intensity], from 0 (frosted blur and a tint, no lens) to 1 (as [base] is).
+     *
+     * The edge effects fade as the intensity falls, and under [LensThreshold] they are removed so
+     * that the glass stops paying for the lens. The blur settles at [FrostBlur] and the tint turns
+     * into a surface-colored frost, so a bar still reads as glass with nothing else on it.
+     *
+     * @param intensity How much glass, 0 to 1
+     * @param base The style at full intensity
+     */
+    @Composable
+    public fun style(intensity: Float, base: PvotGlassStyle = Style): PvotGlassStyle {
+        val i = intensity.coerceIn(0f, maxIntensity())
+        val lens = if (i < LensThreshold || !isLensSupported) 0f else i
+        val surface = MaterialTheme.colorScheme.surfaceVariant
+        val frost = surface.copy(alpha = FrostFillAlpha)
+        return base.copy(
+            strength = base.strength * lens,
+            aberration = base.aberration * lens,
+            edgeBlur = base.edgeBlur * lens,
+            vividSpread = base.vividSpread * lens,
+            reflection = base.reflection * lens,
+            glow = base.glow * lens,
+            darkGlow = base.darkGlow * lens,
+            vividMix = base.vividMix * lens,
+            // Without a blur there is nothing to frost, so the glass is a nearly opaque surface:
+            // anything less lets the content behind it show through, sharp.
+            fillColor = if (isBlurSupported) {
+                lerp(frost, base.fillColor, i)
+            } else {
+                surface.copy(alpha = NoBlurFillAlpha)
+            },
+            frost = FrostBlur,
+            frostMix = 1f - i,
+        )
+    }
+
+    /**
+     * A hairline edge for glass at [intensity], for the glass's [shape]. Without the rim's light
+     * the glass would melt into a background of its own color; this line keeps it distinct, and it
+     * fades out as the intensity rises and the rim takes over (on a light theme it stays faintly). Put it before [pvotGlass] in the
+     * modifier chain so it draws over the glass.
+     *
+     * @param intensity How much glass, 0 to 1
+     * @param shape The glass's shape
+     */
+    @Composable
+    public fun Modifier.edge(intensity: Float, shape: androidx.compose.ui.graphics.Shape): Modifier {
+        // On a light theme the rim's white light vanishes against a white background, so the line
+        // never fully fades there.
+        val light = MaterialTheme.colorScheme.background.luminance() > 0.5f
+        val strength = maxOf(1f - intensity.coerceIn(0f, 1f), if (light) LightThemeEdge else 0f)
+        if (strength <= 0f) return this
+        return border(
+            width = EdgeWidth,
+            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = strength),
+            shape = shape
+        )
+    }
+
+    private val EdgeWidth: Dp = 1.dp
+
+    private const val LightThemeEdge: Float = 0.6f
+
+    private const val FrostFillAlpha: Float = 0.7f
+
+    private const val NoBlurFillAlpha: Float = 0.94f
 
     /** Width of the rim of light round the glass. */
     public val RimWidth: Dp = 1.dp
@@ -229,7 +361,7 @@ private class GlassNode(
     private fun ContentDrawScope.drawBackdrop(radius: Float) {
         val frost = frost ?: return
         val clip = clip ?: return
-        val lens = lens
+        val lens = if (style.lensActive) lens else null
         val shader = lensShader
         val source = backdrop?.layer
         val sourcePosition = backdrop?.positionInRoot ?: Offset.Unspecified
@@ -275,13 +407,13 @@ private class GlassNode(
         val aberration = style.aberration.toPx() * scale
         val edgeBlur = style.edgeBlur.toPx() * scale
         val vividSpread = style.vividSpread.toPx() * scale
-        val blur = style.blur.toPx() * scale
+        val blur = lerp(style.blur.toPx() * scale, style.frost.toPx(), style.frostMix)
         margin = ceil(
             max(strength + aberration + edgeBlur * 2 + vividSpread, band * style.mirrorScale) +
                 blur * 2
         ).toInt() + 2
         frost?.renderEffect = if (blur > 0f) BlurEffect(blur, blur, TileMode.Clamp) else null
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && style.lensActive) {
             setLensUniforms(radius, width, height, band, strength, aberration, edgeBlur, vividSpread)
         }
     }
@@ -385,12 +517,12 @@ half4 main(float2 coord) {
     float ease = t * t;
     // The same, eased in and out (a smoothstep): what grows across the band does so
     // with no step, so the rim fades into the middle with no edge of its own.
-    float smooth = t * t * (3.0 - 2.0 * t);
+    float ramp = t * t * (3.0 - 2.0 * t);
     float2 apart = n * (aberration * ease);
 
     // The bend.
     float2 at = coord + n * (strength * ease);
-    float soft = edgeBlur * smooth;
+    float soft = edgeBlur * ramp;
     half4 bent = split(at, apart) * 0.4
         + split(at + tangent * soft, apart) * 0.15
         + split(at - tangent * soft, apart) * 0.15
@@ -400,11 +532,11 @@ half4 main(float2 coord) {
     // The reflection: as far outside the edge as this point is inside it.
     float inside = -d;
     half4 mirrored = split(coord + n * (inside * (1.0 + mirrorScale)), apart);
-    half4 c = mix(bent, mirrored, half(reflection * smooth));
+    half4 c = mix(bent, mirrored, half(reflection * ramp));
 
     // Vivid colours spread further in: a wider ring round the bend, mixed in only
     // as much as it is saturated.
-    float reach = vividSpread * smooth;
+    float reach = vividSpread * ramp;
     float diag = reach * 0.7071;
     half4 around = (split(at + tangent * reach, apart)
         + split(at - tangent * reach, apart)
@@ -414,7 +546,7 @@ half4 main(float2 coord) {
         + split(at + (n - tangent) * diag, apart)
         + split(at - (n + tangent) * diag, apart)
         + split(at - (n - tangent) * diag, apart)) * 0.125;
-    c = mix(c, around, half(clamp(vividMix * smooth * vividness(around), 0.0, 1.0)));
+    c = mix(c, around, half(clamp(vividMix * ramp * vividness(around), 0.0, 1.0)));
 
     // The rim's light, no line: brighter towards the edge and on the side facing the
     // light, laid over whatever shows there (also over the bare wallpaper).
